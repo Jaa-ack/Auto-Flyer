@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+dist/
 
 # Local runtime state
 .fly_state.json

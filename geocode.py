@@ -6,7 +6,7 @@ import unicodedata
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "MovingGeocoder/1.0 (local utility for fly.py)"
+USER_AGENT = "AutoFlyGeocoder/1.0"
 GEOCODE_URL = "https://nominatim.openstreetmap.org/search"
 COUNTRY_REPLACEMENTS = {
     "日本": "Japan",
@@ -167,7 +167,7 @@ def print_results(original_query, used_query, results, attempts):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Convert a world address into latitude/longitude for fly.py."
+        description="Auto Fly address to latitude/longitude helper."
     )
     parser.add_argument("query", nargs="+", help="Address text to geocode")
     parser.add_argument("--limit", type=int, default=3, help="Maximum number of matches to show")

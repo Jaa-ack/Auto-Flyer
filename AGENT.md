@@ -52,6 +52,7 @@ It also contains:
 - The Web UI should stay local-only by default.
 - If password handling changes, document the security boundary clearly. Do not imply that stored sudo credentials are perfectly isolated from the current macOS user context.
 - When behavior, CLI, setup steps, troubleshooting, or UI flows change, update `README.md` in the same change.
+- Keep both `README.md` and `README.zh-TW.md` aligned when public-facing usage changes.
 - Update `AGENT.md` too when project rules, assumptions, or maintenance workflow change.
 - Do not claim the script changes the phone's permanent hardware GPS location.
 - Favor actionable error messages for tunnel / developer mode / pairing / stale-RSD failures.

@@ -282,7 +282,7 @@ def fetch_real_route_points(waypoints, profile):
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "MovingRouteHelper/1.0",
+            "User-Agent": "AutoFlyRouteHelper/1.0",
             "Accept": "application/json",
         },
     )
@@ -1103,7 +1103,7 @@ def add_connection_options(parser):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Simulate or clear iPhone GPS location on iOS 18+ with pymobiledevice3 DVT."
+        description="Auto Fly CLI for simulated iPhone GPS on iOS 18+."
     )
     parser.set_defaults(auto_tunnel=AUTO_TUNNEL_DEFAULT, tunnel_use_sudo=TUNNEL_USE_SUDO_DEFAULT)
     add_connection_options(parser)

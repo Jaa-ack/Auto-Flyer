@@ -22,7 +22,7 @@ HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Moving UI</title>
+  <title>Auto Fly</title>
   <style>
     :root {
       --bg: #f4efe6;
@@ -189,8 +189,8 @@ HTML = """<!doctype html>
 <body>
   <main>
     <section>
-      <h1>Moving UI</h1>
-      <p class="muted">搜尋地址、挑點、執行 set / route / clear。多點 route 最多 5 點，會自動閉環回到第一點。</p>
+      <h1>Auto Fly</h1>
+      <p class="muted">搜尋地址、選點、執行 set / route / clear。</p>
 
       <h2>1. 搜尋地址</h2>
       <div class="row">
@@ -1009,7 +1009,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Simple local web UI for fly.py")
+    parser = argparse.ArgumentParser(description="Auto Fly local web UI")
     parser.add_argument("--host", default=HOST, help="Bind host")
     parser.add_argument("--port", type=int, default=PORT, help="Bind port")
     return parser.parse_args()
@@ -1018,9 +1018,9 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Moving UI 已啟動: http://{args.host}:{args.port}")
+    print(f"Auto Fly 已啟動: http://{args.host}:{args.port}")
     print("請用瀏覽器打開這個網址。")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nMoving UI 已停止。")
+        print("\nAuto Fly 已停止。")
