@@ -36,7 +36,7 @@ Platform-specific quick guides:
 
 1. Clone the repository.
 
-```bash
+```powershell
 git clone <your-repo-url>
 cd Auto-Fly
 ```
@@ -59,9 +59,9 @@ python -m venv .venv
 
 3. Install dependencies.
 
-```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+```powershell
+cd "C:\path\to\Auto-Flyer"
+.venv311\Scripts\python.exe fly.py doctor
 ```
 
 4. Prepare the iPhone.
@@ -119,8 +119,57 @@ The route timer shows:
 
 Search an address:
 
-```bash
-python geocode.py "Tokyo Tower, Tokyo, Japan"
+## CLI Commands
+
+- `.venv311\Scripts\python.exe fly.py set --lat <lat> --lng <lng>`
+- `.venv311\Scripts\python.exe fly.py route --from-lat <lat> --from-lng <lng> --lat <lat> --lng <lng> [--via lat,lng ...]`
+- `.venv311\Scripts\python.exe fly.py clear`
+- `.venv311\Scripts\python.exe fly.py status`
+- `.venv311\Scripts\python.exe fly.py doctor`
+
+## Troubleshooting (Windows)
+
+### 1) `windows_admin: no`
+
+Cause:
+
+- Terminal not running as Administrator
+
+Fix:
+
+- Reopen PowerShell as Administrator
+
+### 2) `This command requires admin privileges`
+
+Cause:
+
+- Tunnel command launched without elevated permissions
+
+Fix:
+
+- Run from Administrator PowerShell
+
+### 3) `Device is not connected`
+
+Cause:
+
+- USB/trust/developer mode/session issues
+
+Fix:
+
+- Reconnect USB cable
+- Unlock iPhone and tap Trust
+- Confirm Developer Mode enabled
+- Re-run `fly.py doctor`
+
+### 4) `set` reports started but phone does not move
+
+Check in order:
+
+```powershell
+.venv311\Scripts\python.exe fly.py status
+Get-Content .fly_session.log
+.venv311\Scripts\python.exe fly.py clear
 ```
 
 Set point `A`:

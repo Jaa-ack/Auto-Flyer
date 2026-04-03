@@ -1,41 +1,29 @@
 # AGENT.md
 
-This workspace contains a Python utility for simulating iPhone GPS location with `pymobiledevice3`.
-It also contains:
+Windows-first implementation guide for `Auto-Flyer`.
 
-- a geocoding helper for address-to-coordinate lookup
-- a small local Web UI for point selection and command execution
+## Product Direction
 
-## Goal
+This project originally targeted macOS. The active direction is now:
 
-- Target platform: iPhone on iOS 18 or newer
-- Primary behavior: start simulated GPS at a specified latitude/longitude
-- Secondary behavior: stop simulation and restore the iPhone's normal real location
-- Route behavior: support explicit closed-loop routes such as `A -> B -> A` and `A -> B -> C -> D -> E -> A`
-- Route point limit: at most 5 points total before returning to the first point
-- Default route style: prefer realistic road-based routing when possible
-- Web UI route config: support preset and manual modes.
-- Preset route modes: `walk`, `cycle`, `car-direct`, and `car-road`.
-- Helper behavior: convert world addresses into coordinates suitable for `fly.py`
-- UI behavior: allow searching, selecting points, and triggering `set` / `route` / `clear` from a browser on localhost
-- Session behavior: `set` and `route` should return control to the terminal and keep simulation in a background session
+- Primary target: **Windows 10/11 + iPhone (iOS 18+)**
+- Core capability:
+  - set a fixed simulated location
+  - run route playback (`A -> B -> ... -> A`)
+  - clear and restore real GPS
+- Interface priority:
+  - Phase 1: `fly.py` CLI only
+  - Phase 2: `webui.py` on Windows
 
-## Environment
+This tool uses simulated location and does not permanently modify hardware GPS.
 
-- Run inside a Python virtual environment:
-  - `source .venv/bin/activate`
-- Expected dependency:
-  - `pymobiledevice3`
-- Geocoding dependency:
-  - internet access to OpenStreetMap Nominatim
-- Real-road routing dependency:
-  - internet access to OSRM
-- Current workspace entrypoints:
-  - `python fly.py`
-  - `python geocode.py`
-  - `python webui.py`
+## Current Ground Truth
 
-## Implementation Rules
+- `pymobiledevice3` works on Windows with Python 3.11.
+- Tunnel startup on Windows requires **Administrator** privileges.
+- macOS-only features must remain gated:
+  - Keychain password commands (`auth-store`, `auth-status`, `auth-clear`)
+  - AppleScript notifications (`osascript`)
 
 - Prefer `pymobiledevice3 developer dvt simulate-location` for iOS 18+.
 - Keep the CLI explicit and stable.
@@ -58,33 +46,76 @@ It also contains:
 - Do not claim the script changes the phone's permanent hardware GPS location.
 - Favor actionable error messages for tunnel / developer mode / pairing / stale-RSD failures.
 
-## Expected Usage
+- Python 3.11 virtual environment
+- USB-connected iPhone trusted by the PC
+- iPhone Developer Mode enabled
+- PowerShell launched as Administrator for tunnel-related commands
 
-- Set location:
-  - `python fly.py set --lat 25.0330 --lng 121.5654`
-- Closed-loop route:
-  - `python fly.py route --from-lat 25.0330 --from-lng 121.5654 --via 25.0340,121.5660 --lat 25.0350 --lng 121.5670`
-- Clear location:
-  - `python fly.py clear`
-- Convert an address to coordinates:
-  - `python geocode.py "Tokyo Tower, Japan"`
-- Start local Web UI:
-  - `python webui.py`
-- Check local status:
-  - `python fly.py status`
-- Check troubleshooting tips:
-  - `python fly.py doctor`
-- Save sudo password to macOS Keychain:
-  - `python fly.py auth-store`
-- Check saved password status:
-  - `python fly.py auth-status`
-- Delete saved password:
-  - `python fly.py auth-clear`
+## Engineering Rules
 
-## Device Assumptions
+- Prefer explicit, actionable errors over generic failures.
+- Never run macOS-only commands on Windows code paths.
+- Keep `fly.py` behavior stable:
+  - `set`/`route` run in background session
+  - `clear` is explicit stop action
+- Preserve compatibility with existing macOS behavior unless a fix is required.
+- When CLI behavior changes, update `README.md` in the same change.
 
-- The iPhone is already trusted / paired.
-- Developer Mode is enabled on the device.
-- For iOS 18+, creating a tunnel generally requires root privileges.
-- The default path is to auto-start a fresh tunnel with `sudo`.
-- Disconnecting the iPhone from the Mac will usually break or destabilize simulated location.
+## Milestones
+
+### M1: Windows CLI Reliability (in progress)
+
+Goals:
+- `fly.py doctor` reports Windows readiness (including admin state).
+- `fly.py set` on non-admin shell fails fast with clear remediation.
+- `fly.py set` on admin shell can start tunnel and attempt location set.
+- `fly.py clear` and process cleanup work on Windows process model.
+
+Acceptance checks:
+- `.venv311\Scripts\python.exe fly.py doctor`
+- `.venv311\Scripts\python.exe fly.py set --lat 25.0330 --lng 121.5654`
+- `.venv311\Scripts\python.exe fly.py status`
+- `.venv311\Scripts\python.exe fly.py clear`
+
+### M2: Route Stability on Windows
+
+Goals:
+- Route generation and playback are stable with 2-5 waypoints.
+- Session and tunnel lifecycle cleanup remains reliable after route completion/failure.
+
+Acceptance checks:
+- `.venv311\Scripts\python.exe fly.py route --from-lat ... --from-lng ... --lat ... --lng ...`
+- `.venv311\Scripts\python.exe fly.py status`
+- `.venv311\Scripts\python.exe fly.py clear`
+
+### M3: Web UI on Windows
+
+Goals:
+- `webui.py` can drive Windows `fly.py` flows.
+- UI surfaces common Windows failures with actionable hints.
+
+Acceptance checks:
+- `.venv311\Scripts\python.exe webui.py`
+- Browser flow: search -> set -> status -> clear
+
+## Debugging Playbook (Windows)
+
+1. Verify admin state:
+   - `.venv311\Scripts\python.exe fly.py doctor`
+   - expect `windows_admin: yes`
+2. Verify device is connected:
+   - if `start-tunnel` reports device not connected, re-check USB cable, trust prompt, and Developer Mode.
+3. Verify session state:
+   - `.venv311\Scripts\python.exe fly.py status`
+4. Recover:
+   - `.venv311\Scripts\python.exe fly.py clear`
+
+## Near-term TODO
+
+- Improve `doctor` output with explicit "ready/not-ready" summary.
+- Add Windows-specific troubleshooting section in README for:
+  - admin shell
+  - trust flow
+  - Developer Mode visibility
+  - tunnel permission errors
+- Add one-command smoke-test helper for Windows CLI path.
