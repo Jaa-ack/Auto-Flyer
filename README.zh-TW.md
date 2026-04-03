@@ -1,185 +1,67 @@
 # Auto Fly
 
-Auto Fly 是一個跨 macOS 與 Windows 的 iPhone 模擬 GPS 專案，兩個系統共用相同的 Web UI 與 CLI 操作流程。
+Auto Fly 是一個支援 macOS 與 Windows 的 iPhone 模擬 GPS 專案。
 
-語言版本：
+[English](README.md)
 
-- English: `README.md`
-- 繁體中文：`README.zh-TW.md`
+## 下載方式
 
-## 下載版本
+建議使用方式：直接到 GitHub Releases 下載對應系統與語言版本，不建議一般使用者用 `git clone`。
 
-Release 會提供四個版本：
+- Releases 頁面：https://github.com/Jaa-ack/Auto-Fly/releases
+- 最新版本：https://github.com/Jaa-ack/Auto-Fly/releases/latest
 
-- macOS English
-- macOS 繁體中文
-- Windows English
-- Windows 繁體中文
+目前提供的下載檔：
 
-各平台快速說明：
+- macOS English：
+  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-macos-en-0.1.0.zip
+- macOS 繁體中文：
+  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-macos-zh-TW-0.1.0.zip
+- Windows English：
+  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-windows-en-0.1.0.zip
+- Windows 繁體中文：
+  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-windows-zh-TW-0.1.0.zip
 
-- macOS English: `README.macos.en.md`
-- macOS 繁體中文：`README.macos.zh-TW.md`
-- Windows English: `README.windows.en.md`
-- Windows 繁體中文：`README.windows.zh-TW.md`
+各版本使用說明：
 
-## 內含工具
+- [macOS English](README.macos.en.md)
+- [macOS 繁體中文](README.macos.zh-TW.md)
+- [Windows English](README.windows.en.md)
+- [Windows 繁體中文](README.windows.zh-TW.md)
 
-- `webui.py`
-  - 本機瀏覽器介面
-- `fly.py`
-  - 命令列工具
-- `geocode.py`
-  - 地址轉座標工具
+## 功能
+
+- 搜尋地址並轉成座標
+- 將 iPhone 設定到固定模擬定位點
+- 執行閉環路線，例如 `A -> B -> C -> A`
+- 停止模擬並回到正常 GPS
+- macOS 與 Windows 共用相同 Web UI 操作流程
 
 ## 快速開始
 
-1. 下載專案
+1. 下載上方對應的 release 壓縮檔。
+2. 解壓縮。
+3. 建立並啟用 Python 虛擬環境。
+4. 使用 `requirements.txt` 安裝依賴。
+5. 用 USB 接上 iPhone、信任電腦並開啟 Developer Mode。
+6. 啟動 `webui.py` 或使用 `fly.py`。
+
+完整安裝與使用方式，請直接打開符合你系統與語言的說明檔。
+
+## 以 Release 為主
+
+一般使用者建議直接從 Releases 下載，不需要 `git clone`。
+
+只有要自行修改專案時，才建議使用原始碼方式。
+
+## 原始碼開發
+
+如果你要從原始碼使用：
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Jaa-ack/Auto-Fly.git
 cd Auto-Fly
 ```
-
-2. 建立並啟用虛擬環境
-
-macOS：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Windows PowerShell：
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-3. 安裝依賴
-
-```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-4. 準備 iPhone
-
-- 用 USB 接上電腦
-- 信任這台電腦
-- 開啟 Developer Mode
-- Windows 需要時請用系統管理員開啟 PowerShell 或 Terminal
-
-5. 啟動 Web UI
-
-macOS：
-
-```bash
-python webui.py
-```
-
-Windows：
-
-```powershell
-.venv\Scripts\python.exe webui.py
-```
-
-打開：
-
-```text
-http://127.0.0.1:8765
-```
-
-## 日常使用流程
-
-主要流程：
-
-1. 搜尋地址
-2. 加入點位
-3. 用 `set` 把 A 點設為定位
-4. 用 `route` 跑 `A -> B -> C ... -> A`
-5. 用 `clear` 停止模擬
-
-固定路線模式：
-
-- `walk`
-- `cycle`
-- `car-direct`
-- `car-road`
-
-Route 計時器會顯示：
-
-- 目前狀態
-- 開始時間
-- 已經過時間
-- 結束時間
-
-## 常用 CLI 指令
-
-查地址：
-
-```bash
-python geocode.py "Tokyo Tower, Tokyo, Japan"
-```
-
-固定到 A 點：
-
-```bash
-python fly.py set --lat 25.0330 --lng 121.5654
-```
-
-執行閉環 route：
-
-```bash
-python fly.py route \
-  --from-lat 25.0330 --from-lng 121.5654 \
-  --via 25.0340,121.5660 \
-  --lat 25.0345 --lng 121.5670
-```
-
-查看狀態：
-
-```bash
-python fly.py status
-```
-
-停止模擬：
-
-```bash
-python fly.py clear
-```
-
-也支援負經緯度：
-
-```bash
-python fly.py set --lat 40.6860733 --lng -74.019077
-```
-
-## 產生 Release 壓縮檔
-
-執行：
-
-```bash
-python build_release.py
-```
-
-會產生四個壓縮檔：
-
-```text
-dist/auto-fly-macos-en-<version>.zip
-dist/auto-fly-macos-zh-TW-<version>.zip
-dist/auto-fly-windows-en-<version>.zip
-dist/auto-fly-windows-zh-TW-<version>.zip
-```
-
-目前版本號放在 `VERSION`。
-
-## Release 相關檔案
-
-- GitHub repo description：`GITHUB_DESCRIPTION.md`
-- 英文 release notes：`RELEASE_NOTES_v<version>.md`
-- 繁中 release notes：`RELEASE_NOTES_v<version>.zh-TW.md`
 
 ## 作者
 
@@ -188,18 +70,3 @@ dist/auto-fly-windows-zh-TW-<version>.zip
 ## 授權
 
 MIT License，請見 `LICENSE`。
-
-## 不要上傳的本機檔案
-
-這些檔案建議留在本機：
-
-- `.fly_state.json`
-- `.fly_session.log`
-- `.fly_route.gpx`
-- `.saved_routes.json`
-- `__pycache__/`
-- `.venv/`
-- `dist/`
-- `backups/`
-
-專案已經有 `.gitignore`，會自動忽略它們。
