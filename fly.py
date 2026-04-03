@@ -1,13 +1,15 @@
 import argparse
+import ctypes
 import getpass
 import json
 import math
 import os
+import queue
 import re
-import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -21,10 +23,12 @@ STATE_FILE = Path(__file__).with_name(".fly_state.json")
 SESSION_LOG_FILE = Path(__file__).with_name(".fly_session.log")
 ROUTE_GPX_FILE = Path(__file__).with_name(".fly_route.gpx")
 KEYCHAIN_SERVICE = "moving.fly.sudo"
+IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
 
 # Default behavior can be adjusted here if needed.
 AUTO_TUNNEL_DEFAULT = True
-TUNNEL_USE_SUDO_DEFAULT = True
+TUNNEL_USE_SUDO_DEFAULT = IS_MACOS
 TUNNEL_START_TIMEOUT_SECONDS = 20
 MANUAL_RSD_HOST = None
 MANUAL_RSD_PORT = None
@@ -39,6 +43,47 @@ ROUTE_MIN_POINT_INTERVAL_SECONDS = 0.2
 
 def run_command(command):
     return subprocess.run(command, capture_output=True, text=True)
+
+
+def is_windows_admin():
+    if not IS_WINDOWS:
+        return True
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def probe_pymobiledevice3():
+    result = run_command([sys.executable, "-m", "pymobiledevice3", "version"])
+    if result.returncode != 0:
+        return False, result.stderr.strip() or result.stdout.strip() or "pymobiledevice3 check failed"
+    return True, (result.stdout or "").strip()
+
+
+def list_usbmux_devices():
+    result = run_command([sys.executable, "-m", "pymobiledevice3", "usbmux", "list"])
+    if result.returncode != 0:
+        return None, result.stderr.strip() or result.stdout.strip() or "usbmux list failed"
+
+    text = (result.stdout or "").strip()
+    if not text:
+        return [], None
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None, "usbmux list returned non-JSON output"
+
+    if not isinstance(payload, list):
+        return None, "usbmux list returned unexpected payload"
+    return payload, None
+
+
+def fly_command_hint(subcommand):
+    if IS_WINDOWS:
+        return f".venv311\\Scripts\\python.exe fly.py {subcommand}"
+    return f"python fly.py {subcommand}"
 
 
 def utc_now():
@@ -109,6 +154,8 @@ def current_username():
 
 
 def read_keychain_password():
+    if not IS_MACOS:
+        return None
     result = subprocess.run(
         [
             "security",
@@ -128,6 +175,8 @@ def read_keychain_password():
 
 
 def store_keychain_password(password):
+    if not IS_MACOS:
+        raise RuntimeError("auth-store is only supported on macOS Keychain.")
     result = subprocess.run(
         [
             "security",
@@ -149,6 +198,8 @@ def store_keychain_password(password):
 
 
 def delete_keychain_password():
+    if not IS_MACOS:
+        return False
     result = subprocess.run(
         [
             "security",
@@ -171,7 +222,7 @@ def has_keychain_password():
 def parse_waypoint_text(value):
     parts = [part.strip() for part in value.split(",")]
     if len(parts) != 2:
-        raise ValueError(f"無法解析 waypoint: {value}，格式必須為 'lat,lng'")
+        raise ValueError(f"Invalid waypoint format: {value}. Use 'lat,lng'.")
     lat = float(parts[0])
     lng = float(parts[1])
     validate_coordinates(lat, lng)
@@ -184,26 +235,29 @@ def print_command_error(result):
         print(message)
         return
 
-    print("沒有收到 pymobiledevice3 的錯誤輸出，請確認 iPhone 仍在線、Developer Mode 已開啟，且 tunnel / RSD 仍有效。")
+    print(
+        "No detailed error output from pymobiledevice3. "
+        "Check device connectivity, trust pairing, Developer Mode, and tunnel/RSD state."
+    )
 
 
 def validate_coordinates(lat, lng):
     if not (-90 <= lat <= 90):
-        raise ValueError(f"緯度超出範圍: {lat}，必須介於 -90 到 90。")
+        raise ValueError(f"Invalid latitude: {lat}. Must be between -90 and 90.")
     if not (-180 <= lng <= 180):
-        raise ValueError(f"經度超出範圍: {lng}，必須介於 -180 到 180。")
+        raise ValueError(f"Invalid longitude: {lng}. Must be between -180 and 180.")
 
 
 def resolve_route_start(args):
     if args.from_lat is None or args.from_lng is None:
-        raise ValueError("路線模式需要明確起點。請同時提供 --from-lat 與 --from-lng。")
+        raise ValueError("Route requires --from-lat and --from-lng.")
     validate_coordinates(args.from_lat, args.from_lng)
     return args.from_lat, args.from_lng, "manual-start"
 
 
 def normalize_route_waypoints(args):
     if args.from_lat is None or args.from_lng is None:
-        raise ValueError("路線模式需要明確起點。請同時提供 --from-lat 與 --from-lng。")
+        raise ValueError("Route requires --from-lat and --from-lng.")
 
     validate_coordinates(args.from_lat, args.from_lng)
     validate_coordinates(args.lat, args.lng)
@@ -213,7 +267,7 @@ def normalize_route_waypoints(args):
 
     points = [(args.from_lat, args.from_lng), *vias, (args.lat, args.lng)]
     if len(points) > MAX_ROUTE_POINTS:
-        raise ValueError(f"路線最多只支援 {MAX_ROUTE_POINTS} 個點（包含起點與終點）。")
+        raise ValueError(f"Route supports at most {MAX_ROUTE_POINTS} points.")
     return points
 
 
@@ -225,8 +279,6 @@ def haversine_distance_m(lat1, lng1, lat2, lng2):
     d_lambda = math.radians(lng2 - lng1)
     a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
     return 2 * radius_m * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-
 def compute_path_distance_m(points):
     if len(points) < 2:
         return 0.0
@@ -423,6 +475,11 @@ def build_tunnel_command(use_sudo):
 def ensure_sudo_session():
     global SUDO_PASSWORD_CACHE
 
+    if IS_WINDOWS:
+        raise RuntimeError(
+            "sudo tunnel startup is not available on Windows. "
+            "Use --no-sudo-for-tunnel (or rely on default Windows behavior)."
+        )
     print("準備確認 sudo 權限，讓背景 session 可以自動建立 tunnel。")
     if SUDO_PASSWORD_CACHE is None:
         SUDO_PASSWORD_CACHE = read_keychain_password()
@@ -468,6 +525,27 @@ def is_pid_running(pid):
     if not pid:
         return False
 
+    if IS_WINDOWS:
+        # Use Win32 APIs for reliable process liveness checks on Windows.
+        try:
+            pid_int = int(pid)
+        except (TypeError, ValueError):
+            return False
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid_int)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            if not ok:
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+
     try:
         os.kill(pid, 0)
         return True
@@ -476,28 +554,21 @@ def is_pid_running(pid):
 
 
 def terminate_session_pid(pid):
-    if not pid:
-        return
-
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if not is_pid_running(pid):
-            return
-        time.sleep(0.2)
-
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
+    terminate_pid(pid)
 
 
 def terminate_pid(pid):
     if not pid:
+        return
+
+    if IS_WINDOWS:
+        # Windows has no os.killpg; ask taskkill to terminate the process tree.
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         return
 
     try:
@@ -520,11 +591,17 @@ def terminate_pid(pid):
 def start_tunnel(use_sudo):
     global SUDO_PASSWORD_CACHE
 
+    if use_sudo and IS_WINDOWS:
+        raise RuntimeError("Windows does not support sudo tunnel startup. Use --no-sudo-for-tunnel.")
+    if IS_WINDOWS and not is_windows_admin():
+        raise RuntimeError(
+            "Windows tunnel startup requires Administrator privileges.\n"
+            "Reopen PowerShell as Administrator, then rerun your set/route command."
+        )
+
     command = build_tunnel_command(use_sudo)
-    print("準備自動啟動 tunnel 以取得本次有效的 RSD 位址。")
-    if use_sudo:
-        print("這一步通常需要 sudo，終端機可能會要求你輸入密碼。")
-    print("執行指令:", " ".join(command))
+    print("Starting tunnel to acquire a fresh RSD endpoint...")
+    print("Command:", " ".join(command))
 
     process = subprocess.Popen(
         command,
@@ -541,33 +618,38 @@ def start_tunnel(use_sudo):
 
     if use_sudo:
         if SUDO_PASSWORD_CACHE is None:
-            raise RuntimeError("尚未準備 sudo 密碼，無法啟動 tunnel。")
+            raise RuntimeError("sudo password is not prepared; cannot start tunnel.")
         process.stdin.write((SUDO_PASSWORD_CACHE + "\n").encode("utf-8"))
         process.stdin.flush()
         process.stdin.close()
 
+    output_queue = queue.Queue()
+
+    def _read_output_stream(stream):
+        try:
+            while True:
+                chunk = os.read(stream.fileno(), 4096)
+                if not chunk:
+                    break
+                output_queue.put(chunk)
+        except Exception:
+            pass
+        finally:
+            output_queue.put(None)
+
+    if process.stdout is not None:
+        threading.Thread(target=_read_output_stream, args=(process.stdout,), daemon=True).start()
+
+    stream_closed = False
     while time.monotonic() < deadline:
-        if process.poll() is not None:
-            remaining_output = b""
-            if process.stdout:
-                remaining_output = process.stdout.read() or b""
-            if remaining_output:
-                collected_chunks.append(remaining_output)
-            output = b"".join(collected_chunks).decode("utf-8", errors="replace").strip()
-            raise RuntimeError(
-                "自動啟動 tunnel 失敗。\n"
-                f"{output or '沒有收到可用輸出。'}"
-            )
-
-        if process.stdout is None:
+        if process.poll() is not None and stream_closed:
             break
-
-        ready, _, _ = select.select([process.stdout], [], [], 0.5)
-        if not ready:
+        try:
+            chunk = output_queue.get(timeout=0.5)
+        except queue.Empty:
             continue
-
-        chunk = os.read(process.stdout.fileno(), 4096)
-        if not chunk:
+        if chunk is None:
+            stream_closed = True
             continue
 
         collected_chunks.append(chunk)
@@ -575,22 +657,22 @@ def start_tunnel(use_sudo):
         parsed = parse_rsd_from_text(output)
         if parsed:
             rsd_host, rsd_port = parsed
-            print(f"已取得本次 tunnel 的 RSD: {rsd_host} {rsd_port}")
+            print(f"Tunnel ready. RSD: {rsd_host} {rsd_port}")
             return process, rsd_host, rsd_port
 
-    terminate_process(process)
     output = b"".join(collected_chunks).decode("utf-8", errors="replace").strip()
-    raise RuntimeError(
-        "等待 tunnel 啟動逾時，未能取得 RSD_HOST / RSD_PORT。\n"
-        f"{output or '沒有收到可解析的輸出。'}"
-    )
+    if process.poll() is not None:
+        if IS_WINDOWS and "requires admin privileges" in output.lower():
+            output += "\n\nTip: run PowerShell as Administrator and retry."
+        raise RuntimeError("Failed to start tunnel.\n" + (output or "No output."))
 
-
+    terminate_process(process)
+    raise RuntimeError("Tunnel startup timed out; no RSD detected.\n" + (output or "No parseable output."))
 def resolve_manual_rsd(args):
     rsd_host = args.rsd_host if args.rsd_host is not None else MANUAL_RSD_HOST
     rsd_port = args.rsd_port if args.rsd_port is not None else MANUAL_RSD_PORT
     if (rsd_host is None) != (rsd_port is None):
-        raise ValueError("手動指定 RSD 時，必須同時提供 rsd_host 與 rsd_port。")
+        raise ValueError("Manual RSD requires both --rsd-host and --rsd-port.")
     return rsd_host, rsd_port
 
 
@@ -605,7 +687,7 @@ def rsd_session(args):
             return
 
         if not args.auto_tunnel:
-            raise ValueError("目前未提供手動 RSD，且已停用自動 tunnel，無法連線到 iPhone。")
+            raise ValueError("No manual RSD provided and auto-tunnel is disabled.")
 
         tunnel_process, rsd_host, rsd_port = start_tunnel(use_sudo=args.tunnel_use_sudo)
         yield rsd_host, rsd_port, "auto-tunnel"
@@ -614,7 +696,7 @@ def rsd_session(args):
 
 
 def build_hold_set_command(lat, lng, rsd_host, rsd_port):
-    command = [
+    return [
         sys.executable,
         str(Path(__file__).resolve()),
         "_hold-set",
@@ -628,7 +710,6 @@ def build_hold_set_command(lat, lng, rsd_host, rsd_port):
         "--rsd-port",
         str(rsd_port),
     ]
-    return command
 
 
 def build_hold_play_command(gpx_file, rsd_host, rsd_port):
@@ -644,8 +725,6 @@ def build_hold_play_command(gpx_file, rsd_host, rsd_port):
         "--rsd-port",
         str(rsd_port),
     ]
-
-
 def run_clear_command(rsd_host, rsd_port):
     command = [
         *build_base_command(),
@@ -665,9 +744,9 @@ def start_set_session(args):
     existing_state = load_state()
     if existing_state and existing_state.get("session_active") and is_pid_running(existing_state.get("session_pid")):
         raise RuntimeError(
-            "目前已有模擬定位 session 在執行。\n"
+            "A simulated-location session is already running.\n"
             f"PID: {existing_state['session_pid']}\n"
-            "請先執行 `python fly.py clear` 後再重新 set。"
+            f"Run `{fly_command_hint('clear')}` before starting another set session."
         )
 
     tunnel_process = None
@@ -683,7 +762,7 @@ def start_set_session(args):
     else:
         rsd_host, rsd_port = resolve_manual_rsd(args)
         if not rsd_host or not rsd_port:
-            raise ValueError("停用自動 tunnel 時，必須提供 --rsd-host 與 --rsd-port。")
+            raise ValueError("When auto-tunnel is disabled, you must provide --rsd-host and --rsd-port.")
 
     command = build_hold_set_command(args.lat, args.lng, rsd_host, rsd_port)
     log_handle = SESSION_LOG_FILE.open("w", encoding="utf-8")
@@ -697,7 +776,8 @@ def start_set_session(args):
     )
     log_handle.close()
 
-    deadline = time.monotonic() + BACKGROUND_START_GRACE_SECONDS
+    start_grace_seconds = max(BACKGROUND_START_GRACE_SECONDS, 7 if IS_WINDOWS else BACKGROUND_START_GRACE_SECONDS)
+    deadline = time.monotonic() + start_grace_seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
             log_text = ""
@@ -705,8 +785,8 @@ def start_set_session(args):
                 log_text = SESSION_LOG_FILE.read_text(encoding="utf-8", errors="replace").strip()
             terminate_process(tunnel_process)
             raise RuntimeError(
-                "背景模擬定位 session 啟動失敗。\n"
-                f"{log_text or '請檢查 .fly_session.log 取得詳細錯誤。'}"
+                "Background set session exited during startup.\n"
+                f"{log_text or 'Check .fly_session.log for details.'}"
             )
         time.sleep(0.2)
 
@@ -723,19 +803,19 @@ def start_set_session(args):
         session_active=True,
     )
 
-    print(f"已在背景啟動模擬定位 session，PID: {process.pid}")
-    print(f"目標座標: {args.lat}, {args.lng}")
-    print(f"背景日誌: {SESSION_LOG_FILE}")
-    print("若要停止模擬定位，請執行: python fly.py clear")
+    print(f"Set session started in background. PID: {process.pid}")
+    print(f"Target coordinates: {args.lat}, {args.lng}")
+    print(f"Session log: {SESSION_LOG_FILE}")
+    print(f"To stop simulation: {fly_command_hint('clear')}")
 
 
 def start_route_session(args):
     existing_state = load_state()
     if existing_state and existing_state.get("session_active") and is_pid_running(existing_state.get("session_pid")):
         raise RuntimeError(
-            "目前已有模擬定位 session 在執行。\n"
+            "A simulated-location session is already running.\n"
             f"PID: {existing_state['session_pid']}\n"
-            "請先執行 `python fly.py clear` 後再重新 route。"
+            f"Run `{fly_command_hint('clear')}` before starting a route session."
         )
 
     waypoints = normalize_route_waypoints(args)
@@ -760,7 +840,7 @@ def start_route_session(args):
     else:
         rsd_host, rsd_port = resolve_manual_rsd(args)
         if not rsd_host or not rsd_port:
-            raise ValueError("停用自動 tunnel 時，必須提供 --rsd-host 與 --rsd-port。")
+            raise ValueError("When auto-tunnel is disabled, you must provide --rsd-host and --rsd-port.")
 
     command = build_hold_play_command(ROUTE_GPX_FILE, rsd_host, rsd_port)
     if tunnel_process:
@@ -776,7 +856,8 @@ def start_route_session(args):
     )
     log_handle.close()
 
-    deadline = time.monotonic() + BACKGROUND_START_GRACE_SECONDS
+    start_grace_seconds = max(BACKGROUND_START_GRACE_SECONDS, 7 if IS_WINDOWS else BACKGROUND_START_GRACE_SECONDS)
+    deadline = time.monotonic() + start_grace_seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
             log_text = ""
@@ -784,8 +865,8 @@ def start_route_session(args):
                 log_text = SESSION_LOG_FILE.read_text(encoding="utf-8", errors="replace").strip()
             terminate_process(tunnel_process)
             raise RuntimeError(
-                "背景路線模擬 session 啟動失敗。\n"
-                f"{log_text or '請檢查 .fly_session.log 取得詳細錯誤。'}"
+                "Background route session exited during startup.\n"
+                f"{log_text or 'Check .fly_session.log for details.'}"
             )
         time.sleep(0.2)
 
@@ -802,7 +883,7 @@ def start_route_session(args):
         tunnel_pid=tunnel_process.pid if tunnel_process else None,
         session_log=str(SESSION_LOG_FILE),
         session_active=True,
-        route_mode="closed-loop",
+        route_mode="manual-waypoints",
         route_profile=args.route_profile,
         route_source_requested=args.route_source,
         route_source_used=route_source_used,
@@ -818,24 +899,23 @@ def start_route_session(args):
 
     labels = [chr(ord("A") + index) for index in range(len(waypoints))]
     trip_label = " -> ".join(labels + ["A"])
-    print(f"已在背景啟動路線模擬 session，PID: {process.pid}")
-    print(f"路線模式: {trip_label}")
+    print(f"Route session started in background. PID: {process.pid}")
+    print(f"Waypoint order: {trip_label}")
     for index, (lat, lng) in enumerate(waypoints):
-        print(f"點位 {labels[index]}: {lat}, {lng}")
-    print(f"路線來源: {route_source_used}")
-    print(f"移動速度: {speed_kph:.1f} km/h")
-    print(f"總距離: {format_distance(total_distance_m)}")
-    print(f"預估完成時間: {format_duration(estimated_duration_seconds)}")
-    print(f"GPX 路徑檔: {ROUTE_GPX_FILE}")
-    print(f"背景日誌: {SESSION_LOG_FILE}")
-    print("若要停止模擬定位，請執行: python fly.py clear")
-
+        print(f"Point {labels[index]}: {lat}, {lng}")
+    print(f"Route source used: {route_source_used}")
+    print(f"Speed: {speed_kph:.1f} km/h")
+    print(f"Distance: {format_distance(total_distance_m)}")
+    print(f"Estimated duration: {format_duration(estimated_duration_seconds)}")
+    print(f"Generated GPX: {ROUTE_GPX_FILE}")
+    print(f"Session log: {SESSION_LOG_FILE}")
+    print(f"To stop simulation: {fly_command_hint('clear')}")
 
 def hold_set_session(args):
     validate_coordinates(args.lat, args.lng)
     rsd_host, rsd_port = resolve_manual_rsd(args)
     if not rsd_host or not rsd_port:
-        raise ValueError("_hold-set 需要明確的 --rsd-host 與 --rsd-port。")
+        raise ValueError("_hold-set requires --rsd-host and --rsd-port.")
 
     command = [
         *build_base_command(),
@@ -848,24 +928,35 @@ def hold_set_session(args):
         str(args.lng),
     ]
 
-    print(f"準備將 iPhone 模擬定位到座標: {args.lat}, {args.lng}", flush=True)
-    print("這是 simulated location，這個背景 session 會保持執行，直到你執行 clear。", flush=True)
-    print("執行指令:", " ".join(command), flush=True)
+    print(f"Preparing simulated location set: {args.lat}, {args.lng}", flush=True)
+    print("This hold session stays alive until clear is called.", flush=True)
+    print("Command:", " ".join(command), flush=True)
 
-    result = run_command(command)
-    if result.returncode == 0:
-        print("simulate-location set 已啟動，session 將保持執行。", flush=True)
-        return
+    child = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=sys.stdout,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
 
-    print("設定模擬定位失敗，錯誤訊息如下：", flush=True)
-    print_command_error(result)
-    sys.exit(result.returncode)
+    deadline = time.monotonic() + max(BACKGROUND_START_GRACE_SECONDS, 6)
+    while time.monotonic() < deadline:
+        if child.poll() is not None:
+            print("simulate-location set failed during startup.", flush=True)
+            sys.exit(child.returncode or 1)
+        time.sleep(0.2)
 
+    print("simulate-location set is now holding.", flush=True)
+    try:
+        child.wait()
+    except KeyboardInterrupt:
+        terminate_process(child)
 
 def hold_play_session(args):
     rsd_host, rsd_port = resolve_manual_rsd(args)
     if not rsd_host or not rsd_port:
-        raise ValueError("_hold-play 需要明確的 --rsd-host 與 --rsd-port。")
+        raise ValueError("_hold-play requires --rsd-host and --rsd-port.")
 
     command = [
         *build_base_command(),
@@ -876,9 +967,9 @@ def hold_play_session(args):
         str(args.gpx_file),
     ]
 
-    print(f"準備重播 GPX 路線: {args.gpx_file}", flush=True)
-    print("這個背景 session 會持續依路線移動，直到你執行 clear 或路線播完。", flush=True)
-    print("執行指令:", " ".join(command), flush=True)
+    print(f"Starting GPX playback: {args.gpx_file}", flush=True)
+    print("This session runs until playback completes or clear is called.", flush=True)
+    print("Command:", " ".join(command), flush=True)
 
     result = run_command(command)
     if result.returncode == 0:
@@ -913,21 +1004,18 @@ def hold_play_session(args):
             waypoints=previous_state.get("waypoints"),
             waypoint_count=previous_state.get("waypoint_count"),
         )
-        send_completion_notification(
-            "fly.py route finished",
-            "Route playback completed and returned to the first waypoint.",
-        )
-        print("simulate-location play 已完成，路線已播放結束。", flush=True)
+        send_completion_notification("fly.py route finished", "Route playback completed.")
+        print("simulate-location play finished.", flush=True)
         return
 
-    print("路線模擬失敗，錯誤訊息如下：", flush=True)
+    print("simulate-location play failed.", flush=True)
     if args.tunnel_pid:
         terminate_pid(args.tunnel_pid)
     print_command_error(result)
     sys.exit(result.returncode)
-
-
 def send_completion_notification(title, message):
+    if not IS_MACOS:
+        return
     script = f'display notification "{message}" with title "{title}"'
     try:
         subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
@@ -954,8 +1042,9 @@ def clear_location(args):
     try:
         rsd_host, rsd_port, connection_mode = rsd_values
         result = run_clear_command(rsd_host, rsd_port)
+
         if result.returncode != 0 and used_existing_rsd and args.auto_tunnel:
-            print("現有 RSD 無法連線，改用新的 tunnel 重新嘗試 clear。")
+            print("Existing RSD failed; retrying clear with a fresh tunnel.")
             if args.tunnel_use_sudo:
                 ensure_sudo_session()
             retry_context = rsd_session(args)
@@ -964,18 +1053,16 @@ def clear_location(args):
                 retry_result = run_clear_command(retry_rsd_host, retry_rsd_port)
                 if retry_result.returncode == 0:
                     rsd_host, rsd_port, connection_mode = retry_rsd_host, retry_rsd_port, retry_connection_mode
-                    result = retry_result
-                else:
-                    result = retry_result
+                result = retry_result
             finally:
                 retry_context.__exit__(None, None, None)
 
         if result.returncode == 0:
             if existing_pid and is_pid_running(existing_pid):
-                print(f"終止背景模擬定位 session，PID: {existing_pid}")
+                print(f"Stopping background session PID: {existing_pid}")
                 terminate_session_pid(existing_pid)
             if existing_tunnel_pid and is_pid_running(existing_tunnel_pid):
-                print(f"終止背景 tunnel session，PID: {existing_tunnel_pid}")
+                print(f"Stopping tunnel PID: {existing_tunnel_pid}")
                 terminate_pid(existing_tunnel_pid)
             update_state(
                 "clear",
@@ -987,10 +1074,10 @@ def clear_location(args):
                 session_log=str(SESSION_LOG_FILE),
                 session_active=False,
             )
-            print("已停止模擬定位，iPhone 應恢復真實位置。")
+            print("Simulated location cleared. Device should be back to real GPS.")
             return
 
-        print("停止模擬定位失敗，錯誤訊息如下：")
+        print("Failed to clear simulated location.")
         print_command_error(result)
         sys.exit(result.returncode)
     finally:
@@ -1001,8 +1088,8 @@ def clear_location(args):
 def show_status():
     state = load_state()
     if state is None:
-        print("本機尚未記錄任何 set / clear 操作。")
-        print("這不代表 iPhone 一定沒有模擬定位，只代表這支腳本尚未留下狀態檔。")
+        print("No local state found yet.")
+        print("This only means fly.py has not written a state file on this machine.")
         return
 
     pid = state.get("session_pid")
@@ -1015,73 +1102,81 @@ def show_status():
     if state.get("session_active") and pid and not running:
         state["session_active"] = False
 
-    print("本機最後一次送出的定位命令：")
+    print("Last local fly.py state:")
     print(json.dumps(state, indent=2, ensure_ascii=False))
 
     if state["action"] == "set" and state.get("session_active") and running:
-        print("解讀：模擬定位背景 session 仍在執行。")
-        print("若要回復真實 GPS，請執行: python fly.py clear")
+        print("Interpretation: set session is still running.")
+        print(f"To restore real GPS: {fly_command_hint('clear')}")
     elif state["action"] == "route" and state.get("session_active") and running:
-        print("解讀：路線模擬背景 session 仍在執行。")
-        print("若要回復真實 GPS，請執行: python fly.py clear")
+        print("Interpretation: route session is still running.")
+        print(f"To restore real GPS: {fly_command_hint('clear')}")
         if state.get("waypoint_count"):
-            print(f"路線點數: {state['waypoint_count']}（最終會回到第一個點）")
+            print(f"Waypoint count: {state['waypoint_count']} (route ends back at A)")
         if state.get("estimated_duration_seconds"):
-            print(f"預估總時長: {format_duration(state['estimated_duration_seconds'])}")
+            print(f"Estimated duration: {format_duration(state['estimated_duration_seconds'])}")
         if state.get("distance_m"):
-            print(f"預估總距離: {format_distance(state['distance_m'])}")
+            print(f"Estimated distance: {format_distance(state['distance_m'])}")
     elif state["action"] == "set":
-        print("解讀：最後一次是 set，但背景 session 目前不在執行。")
-        print("若手機仍顯示模擬位置，請直接執行: python fly.py clear")
+        print("Interpretation: last action was set, but session is not running now.")
+        print(f"If phone still shows simulated GPS, run: {fly_command_hint('clear')}")
     elif state["action"] == "route":
         if state.get("route_completed"):
-            print("解讀：路線模擬已完成。")
+            print("Interpretation: route session completed.")
             if state.get("completed_at"):
-                print(f"完成時間: {state['completed_at']}")
+                print(f"Completed at: {state['completed_at']}")
         else:
-            print("解讀：最後一次是 route，但背景 session 目前不在執行。")
-            print("若手機仍顯示模擬位置，請直接執行: python fly.py clear")
+            print("Interpretation: last action was route, but session is not running now.")
+            print(f"If phone still shows simulated GPS, run: {fly_command_hint('clear')}")
     else:
-        print("解讀：最後一次命令是 clear。若命令成功，iPhone 應已恢復真實 GPS。")
+        print("Interpretation: last action was clear.")
 
 
 def run_doctor(args):
     manual_rsd_host, manual_rsd_port = resolve_manual_rsd(args)
+    pmd3_ok, pmd3_info = probe_pymobiledevice3()
+    devices, devices_error = list_usbmux_devices()
+    windows_admin_ok = is_windows_admin() if IS_WINDOWS else True
 
-    print("檢查目前腳本設定：")
+    print("Current configuration:")
     print(f"- Python executable: {sys.executable}")
     print(f"- auto_tunnel: {args.auto_tunnel}")
     print(f"- tunnel_use_sudo: {args.tunnel_use_sudo}")
-    print(f"- manual_rsd_host: {manual_rsd_host or '(未設定)'}")
-    print(f"- manual_rsd_port: {manual_rsd_port or '(未設定)'}")
+    print(f"- manual_rsd_host: {manual_rsd_host or '(not set)'}")
+    print(f"- manual_rsd_port: {manual_rsd_port or '(not set)'}")
     print(f"- tunnel_timeout_seconds: {TUNNEL_START_TIMEOUT_SECONDS}")
     print(f"- state_file: {STATE_FILE}")
     print(f"- session_log_file: {SESSION_LOG_FILE}")
+    if IS_WINDOWS:
+        print(f"- windows_admin: {'yes' if windows_admin_ok else 'no'}")
+
     print()
-    print("預設行為：")
-    print("1. set 會在背景啟動一個模擬定位 session。")
-    print("2. set 會先在前景建立 tunnel，避免背景 session 無法互動輸入 sudo 密碼。")
-    print("3. tunnel 啟動後，腳本會自動解析本次有效的 RSD_HOST / RSD_PORT。")
-    print("4. 然後背景 session 會用這組 RSD 執行 simulate-location set。")
-    print("5. clear 會先沿用現有 RSD 送出 simulate-location clear，再終止背景 session 與 tunnel。")
+    print("Quick readiness checks:")
+    print(f"- pymobiledevice3: {'ok' if pmd3_ok else 'failed'}")
+    print(f"  detail: {pmd3_info}")
+    if devices_error:
+        print("- device_detect: failed")
+        print(f"  detail: {devices_error}")
+    else:
+        print(f"- device_detect: {len(devices)} device(s)")
+        for device in devices:
+            name = device.get("DeviceName", "(unknown)")
+            conn_type = device.get("ConnectionType", "(unknown)")
+            ios_version = device.get("ProductVersion", "?")
+            print(f"  - {name} / iOS {ios_version} / {conn_type}")
+
+    if IS_WINDOWS:
+        print(f"- windows_ready_for_tunnel: {'yes' if (windows_admin_ok and pmd3_ok) else 'no'}")
+        if not windows_admin_ok:
+            print("  action: reopen PowerShell as Administrator")
+        if devices is not None and len(devices) == 0:
+            print("  action: reconnect iPhone and accept Trust prompt")
+
     print()
-    print("路線模式：")
-    print("1. `route` 需要明確起點，並支援 A -> B -> C ... -> A 的閉環路線。")
-    print(f"2. 最多支援 {MAX_ROUTE_POINTS} 個點（包含起點與終點，不含最後自動回到起點）。")
-    print("3. 你必須手動提供 --from-lat 與 --from-lng。")
-    print("4. 程式目前無法直接讀取 iPhone 真實當前 GPS。")
-    print("5. `route` 會優先嘗試抓真實道路路線，抓不到時才退回直線。")
-    print()
-    print("地址搜尋建議：")
-    print("1. 優先使用「地標, 城市, 國家」格式。")
-    print("2. 若是街道地址，盡量寫成「門牌, 街道, 區, 城市, 郵遞區號, 國家」。")
-    print("3. 日文地址可優先改成英文或羅馬字，通常比較容易命中。")
-    print("4. 例如把 `...819-0031日本` 改成 `..., Fukuoka, 819-0031, Japan`。")
-    print()
-    print("密碼管理：")
-    print("1. 可用 `python fly.py auth-store` 把 sudo 密碼存入 macOS Keychain。")
-    print("2. 可用 `python fly.py auth-status` 檢查是否已保存。")
-    print("3. 可用 `python fly.py auth-clear` 刪除已保存的 sudo 密碼。")
+    print("Recommended troubleshooting order:")
+    print(f"1. {fly_command_hint('status')}")
+    print(f"2. Inspect session log: {SESSION_LOG_FILE}")
+    print(f"3. {fly_command_hint('clear')}")
 
 
 def add_connection_options(parser):
@@ -1122,26 +1217,20 @@ def parse_args():
     route_parser.add_argument("--lng", type=float, required=True, help="Destination longitude")
     route_parser.add_argument("--from-lat", type=float, required=True, help="Route start latitude")
     route_parser.add_argument("--from-lng", type=float, required=True, help="Route start longitude")
-    route_parser.add_argument(
-        "--via",
-        action="append",
-        default=[],
-        help="Intermediate waypoint in 'lat,lng' format. Repeat up to 3 times.",
-    )
+    route_parser.add_argument("--via", action="append", default=[], help="Intermediate waypoint in 'lat,lng' format. Repeat up to 3 times.")
     route_parser.add_argument("--speed-kph", type=float, default=ROUTE_SPEED_KPH_DEFAULT, help="Movement speed in kilometers per hour")
     route_parser.add_argument("--step-meters", type=float, default=5.0, help="Approximate meters between route points")
-    route_parser.add_argument("--pause-seconds", type=float, default=0.0, help="Pause duration at the turnaround point")
+    route_parser.add_argument("--pause-seconds", type=float, default=0.0, help="Pause duration at turnaround")
     route_parser.add_argument("--route-source", choices=["osrm", "linear"], default="osrm", help="Route generation source")
-    route_parser.add_argument("--route-profile", choices=["foot", "cycling", "driving"], default=ROUTE_PROFILE_DEFAULT, help="Routing profile for real-road route generation")
+    route_parser.add_argument("--route-profile", choices=["foot", "cycling", "driving"], default=ROUTE_PROFILE_DEFAULT, help="Routing profile for road route generation")
 
-    auth_status_parser = subparsers.add_parser("auth-status", help="Show whether a sudo password is stored in macOS Keychain")
-    auth_status_parser.set_defaults(action="auth-status")
-
-    auth_store_parser = subparsers.add_parser("auth-store", help="Store sudo password in macOS Keychain for future tunnel startup")
-    auth_store_parser.set_defaults(action="auth-store")
-
-    auth_clear_parser = subparsers.add_parser("auth-clear", help="Delete stored sudo password from macOS Keychain")
-    auth_clear_parser.set_defaults(action="auth-clear")
+    if IS_MACOS:
+        auth_status_parser = subparsers.add_parser("auth-status", help="Show whether a sudo password is stored in macOS Keychain")
+        auth_status_parser.set_defaults(action="auth-status")
+        auth_store_parser = subparsers.add_parser("auth-store", help="Store sudo password in macOS Keychain for future tunnel startup")
+        auth_store_parser.set_defaults(action="auth-store")
+        auth_clear_parser = subparsers.add_parser("auth-clear", help="Delete stored sudo password from macOS Keychain")
+        auth_clear_parser.set_defaults(action="auth-clear")
 
     hold_set_parser = subparsers.add_parser("_hold-set", help=argparse.SUPPRESS)
     hold_set_parser.set_defaults(auto_tunnel=AUTO_TUNNEL_DEFAULT, tunnel_use_sudo=TUNNEL_USE_SUDO_DEFAULT)
@@ -1159,7 +1248,7 @@ def parse_args():
     clear_parser.set_defaults(action="clear", auto_tunnel=AUTO_TUNNEL_DEFAULT, tunnel_use_sudo=TUNNEL_USE_SUDO_DEFAULT)
     add_connection_options(clear_parser)
 
-    status_parser = subparsers.add_parser("status", help="Show last local set/clear state recorded by this script")
+    status_parser = subparsers.add_parser("status", help="Show last local state recorded by this script")
     status_parser.set_defaults(action="status", auto_tunnel=AUTO_TUNNEL_DEFAULT, tunnel_use_sudo=TUNNEL_USE_SUDO_DEFAULT)
     add_connection_options(status_parser)
 
@@ -1178,25 +1267,25 @@ if __name__ == "__main__":
         if args.action == "clear":
             clear_location(args)
         elif args.action == "auth-status":
-            if has_keychain_password():
-                print("目前已在 macOS Keychain 保存 sudo 密碼。")
-            else:
-                print("目前沒有保存 sudo 密碼。")
+            if not IS_MACOS:
+                raise RuntimeError("auth-status is only supported on macOS.")
+            print("macOS Keychain password is stored." if has_keychain_password() else "No stored macOS Keychain password.")
         elif args.action == "auth-store":
-            password = getpass.getpass("請輸入要保存到 macOS Keychain 的 sudo 密碼: ")
+            if not IS_MACOS:
+                raise RuntimeError("auth-store is only supported on macOS.")
+            password = getpass.getpass("Enter sudo password to store in macOS Keychain: ")
             if not password:
-                raise ValueError("密碼不可為空。")
+                raise ValueError("Password cannot be empty.")
             result = subprocess.run(["sudo", "-S", "-v"], input=password + "\n", text=True, capture_output=True)
             if result.returncode != 0:
-                raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "sudo 驗證失敗")
+                raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "sudo validation failed")
             store_keychain_password(password)
             SUDO_PASSWORD_CACHE = password
-            print("已保存 sudo 密碼到 macOS Keychain。")
+            print("Stored sudo password in macOS Keychain.")
         elif args.action == "auth-clear":
-            if delete_keychain_password():
-                print("已從 macOS Keychain 刪除保存的 sudo 密碼。")
-            else:
-                print("macOS Keychain 中沒有可刪除的 sudo 密碼。")
+            if not IS_MACOS:
+                raise RuntimeError("auth-clear is only supported on macOS.")
+            print("Deleted stored sudo password." if delete_keychain_password() else "No stored password to delete.")
         elif args.action == "status":
             show_status()
         elif args.action == "doctor":
