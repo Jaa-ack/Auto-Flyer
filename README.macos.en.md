@@ -4,9 +4,9 @@ Auto Fly for macOS lets you run simulated iPhone GPS movement from a browser UI 
 
 Download:
 
-- Releases page: https://github.com/Jaa-ack/Auto-Fly/releases
+- Releases page: https://github.com/Jaa-ack/Auto-Flyer/releases
 - Direct download:
-  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-macos-en-0.1.0.zip
+  https://github.com/Jaa-ack/Auto-Flyer/releases/download/v0.1.0/auto-fly-macos-en-0.1.0.zip
 
 ## Install
 

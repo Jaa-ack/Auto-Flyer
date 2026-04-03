@@ -8,19 +8,19 @@ Auto Fly 是一個支援 macOS 與 Windows 的 iPhone 模擬 GPS 專案。
 
 建議使用方式：直接到 GitHub Releases 下載對應系統與語言版本，不建議一般使用者用 `git clone`。
 
-- Releases 頁面：https://github.com/Jaa-ack/Auto-Fly/releases
-- 最新版本：https://github.com/Jaa-ack/Auto-Fly/releases/latest
+- Releases 頁面：https://github.com/Jaa-ack/Auto-Flyer/releases
+- 最新版本：https://github.com/Jaa-ack/Auto-Flyer/releases/latest
 
 目前提供的下載檔：
 
 - macOS English：
-  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-macos-en-0.1.0.zip
+  https://github.com/Jaa-ack/Auto-Flyer/releases/download/v0.1.0/auto-fly-macos-en-0.1.0.zip
 - macOS 繁體中文：
-  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-macos-zh-TW-0.1.0.zip
+  https://github.com/Jaa-ack/Auto-Flyer/releases/download/v0.1.0/auto-fly-macos-zh-TW-0.1.0.zip
 - Windows English：
-  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-windows-en-0.1.0.zip
+  https://github.com/Jaa-ack/Auto-Flyer/releases/download/v0.1.0/auto-fly-windows-en-0.1.0.zip
 - Windows 繁體中文：
-  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-windows-zh-TW-0.1.0.zip
+  https://github.com/Jaa-ack/Auto-Flyer/releases/download/v0.1.0/auto-fly-windows-zh-TW-0.1.0.zip
 
 各版本使用說明：
 
@@ -59,7 +59,7 @@ Auto Fly 是一個支援 macOS 與 Windows 的 iPhone 模擬 GPS 專案。
 如果你要從原始碼使用：
 
 ```bash
-git clone https://github.com/Jaa-ack/Auto-Fly.git
+git clone https://github.com/Jaa-ack/Auto-Flyer.git
 cd Auto-Fly
 ```
 

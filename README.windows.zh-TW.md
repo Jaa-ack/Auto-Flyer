@@ -4,9 +4,9 @@ Auto Fly for Windows 可用瀏覽器介面或 CLI 來執行 iPhone 模擬 GPS。
 
 下載：
 
-- Releases 頁面：https://github.com/Jaa-ack/Auto-Fly/releases
+- Releases 頁面：https://github.com/Jaa-ack/Auto-Flyer/releases
 - 直接下載：
-  https://github.com/Jaa-ack/Auto-Fly/releases/download/v0.1.0/auto-fly-windows-zh-TW-0.1.0.zip
+  https://github.com/Jaa-ack/Auto-Flyer/releases/download/v0.1.0/auto-fly-windows-zh-TW-0.1.0.zip
 
 ## 安裝
 
