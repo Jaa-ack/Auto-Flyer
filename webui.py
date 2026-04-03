@@ -81,10 +81,8 @@ HTML = """<!doctype html>
     <pre id="output">Ready.</pre>
     <h2 style="margin-top:16px;">Route Monitor</h2>
     <div class="timer-grid">
-      <div class="timer-box"><div class="label">State</div><div class="value" id="timerStatus">Idle</div></div>
-      <div class="timer-box"><div class="label">Started At</div><div class="value" id="timerStartedAt">--</div></div>
+      <div class="timer-box"><div class="label">Estimate</div><div class="value" id="timerEstimate">Idle / --:--:--</div></div>
       <div class="timer-box"><div class="label">Elapsed</div><div class="value" id="timerElapsed">--:--:--</div></div>
-      <div class="timer-box"><div class="label">Ended At</div><div class="value" id="timerEndedAt">--</div></div>
     </div>
     <p class="muted" id="timerNote">No active route session.</p>
   </section>
@@ -96,8 +94,8 @@ const state={searchResults:[],waypoints:[],savedRoutes:[],routeMonitor:null};
 const byId=(id)=>document.getElementById(id);
 const setOutput=(v)=>{byId("output").textContent=typeof v==="string"?v:JSON.stringify(v,null,2)};
 const formatSeconds=(s)=>{if(s==null||!Number.isFinite(s)||s<0)return"--:--:--";s=Math.floor(s);const h=String(Math.floor(s/3600)).padStart(2,"0"),m=String(Math.floor((s%3600)/60)).padStart(2,"0"),sec=String(s%60).padStart(2,"0");return `${h}:${m}:${sec}`;};
-const renderRouteMonitor=(d)=>{state.routeMonitor=d;byId("timerStatus").textContent=d.label||"Idle";byId("timerElapsed").textContent=formatSeconds(d.elapsed_seconds);byId("timerStartedAt").textContent=d.started_at_label||"--";byId("timerEndedAt").textContent=d.ended_at_label||"--";byId("timerNote").textContent=d.note||"No route info.";};
-const refreshRouteMonitor=async()=>{try{renderRouteMonitor(await (await fetch("/api/route-monitor")).json())}catch{renderRouteMonitor({label:"Monitor Error",elapsed_seconds:null,started_at_label:"--",ended_at_label:"--",note:"Failed to query route monitor."})}};
+const renderRouteMonitor=(d)=>{state.routeMonitor=d;const estimate=formatSeconds(d.estimated_seconds);const label=d.label||"Idle";byId("timerEstimate").textContent=`${label} / ${estimate}`;byId("timerElapsed").textContent=formatSeconds(d.elapsed_seconds);byId("timerNote").textContent=d.note||"No route info.";};
+const refreshRouteMonitor=async()=>{try{renderRouteMonitor(await (await fetch("/api/route-monitor")).json())}catch{renderRouteMonitor({label:"Monitor Error",estimated_seconds:null,elapsed_seconds:null,note:"Failed to query route monitor."})}};
 const updateWaypointCount=()=>{byId("waypointCount").textContent=`${state.waypoints.length} / 5`;};
 const setManualDisabled=(d)=>{byId("speedKph").readOnly=d;byId("stepMeters").readOnly=d;byId("pauseSeconds").readOnly=d;byId("routeSource").disabled=d;byId("routeProfile").disabled=d;};
 const syncRoutePresetFields=()=>{if(byId("configMode").value!=="preset"){setManualDisabled(false);return;}const p=ROUTE_PRESETS[byId("routeMode").value];byId("routeProfile").value=p.route_profile;byId("speedKph").value=p.speed_kph.toFixed(1);byId("stepMeters").value=p.step_meters.toFixed(1);byId("routeSource").value=p.route_source;byId("pauseSeconds").value=String(p.pause_seconds);setManualDisabled(true);};
@@ -244,7 +242,7 @@ def parse_state_time(value):
 def build_route_monitor_payload():
     state = load_state() or {}
     if state.get("action") != "route":
-        return {"status": "idle", "label": "Idle", "elapsed_seconds": None, "started_at_label": "--", "ended_at_label": "--", "note": "No route in progress."}
+        return {"status": "idle", "label": "Idle", "estimated_seconds": None, "elapsed_seconds": None, "note": "No route in progress."}
 
     started_at = parse_state_time(state.get("updated_at"))
     session_pid = state.get("session_pid")
@@ -254,20 +252,19 @@ def build_route_monitor_payload():
         return {
             "status": "completed",
             "label": "Completed",
+            "estimated_seconds": state.get("estimated_duration_seconds"),
             "elapsed_seconds": state.get("estimated_duration_seconds"),
-            "started_at_label": state.get("updated_at") or "--",
-            "ended_at_label": state.get("completed_at") or "--",
             "note": f"Route finished at {state.get('completed_at') or '-'}",
         }
 
     if running and started_at is not None:
         elapsed = max(0, (datetime.now(started_at.tzinfo) - started_at).total_seconds())
-        return {"status": "running", "label": "Running", "elapsed_seconds": elapsed, "started_at_label": state.get("updated_at") or "--", "ended_at_label": "--", "note": "Background route session is active."}
+        return {"status": "running", "label": "In Progress", "estimated_seconds": state.get("estimated_duration_seconds"), "elapsed_seconds": elapsed, "note": "Background route session is active."}
 
     if state.get("session_active") is False and not state.get("route_completed"):
-        return {"status": "stopped", "label": "Stopped", "elapsed_seconds": None, "started_at_label": state.get("updated_at") or "--", "ended_at_label": "--", "note": "Route session was stopped or cleared."}
+        return {"status": "stopped", "label": "Stopped", "estimated_seconds": state.get("estimated_duration_seconds"), "elapsed_seconds": None, "note": "Route session was stopped or cleared."}
 
-    return {"status": "unknown", "label": "Unknown", "elapsed_seconds": None, "started_at_label": state.get("updated_at") or "--", "ended_at_label": state.get("completed_at") or "--", "note": "Unable to determine current route state."}
+    return {"status": "unknown", "label": "Unknown", "estimated_seconds": state.get("estimated_duration_seconds"), "elapsed_seconds": None, "note": "Unable to determine current route state."}
 
 
 class Handler(BaseHTTPRequestHandler):
