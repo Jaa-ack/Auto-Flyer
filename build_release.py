@@ -4,17 +4,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-RELEASE_NAME = f"auto-fly-{VERSION}"
-STAGING = DIST / RELEASE_NAME
+RELEASE_NOTES_EN = f"RELEASE_NOTES_v{VERSION}.md"
+RELEASE_NOTES_ZH = f"RELEASE_NOTES_v{VERSION}.zh-TW.md"
 
-INCLUDE_FILES = [
-    "README.md",
-    "README.zh-TW.md",
+COMMON_FILES = [
     "AGENT.md",
     "LICENSE",
     "GITHUB_DESCRIPTION.md",
-    "RELEASE_NOTES_v0.1.0.md",
-    "RELEASE_NOTES_v0.1.0.zh-TW.md",
+    RELEASE_NOTES_EN,
+    RELEASE_NOTES_ZH,
+    "README.md",
+    "README.zh-TW.md",
     "fly.py",
     "geocode.py",
     "webui.py",
@@ -23,20 +23,52 @@ INCLUDE_FILES = [
     "VERSION",
 ]
 
+VARIANTS = [
+    {
+        "name": f"auto-fly-macos-en-{VERSION}",
+        "readme_source": "README.macos.en.md",
+    },
+    {
+        "name": f"auto-fly-macos-zh-TW-{VERSION}",
+        "readme_source": "README.macos.zh-TW.md",
+    },
+    {
+        "name": f"auto-fly-windows-en-{VERSION}",
+        "readme_source": "README.windows.en.md",
+    },
+    {
+        "name": f"auto-fly-windows-zh-TW-{VERSION}",
+        "readme_source": "README.windows.zh-TW.md",
+    },
+]
+
+
+def build_variant(variant):
+    release_name = variant["name"]
+    staging = DIST / release_name
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+
+    for name in COMMON_FILES:
+        shutil.copy2(ROOT / name, staging / name)
+
+    shutil.copy2(ROOT / variant["readme_source"], staging / "README.release.md")
+    shutil.copy2(ROOT / variant["readme_source"], staging / "README.md")
+
+    archive_path = shutil.make_archive(str(DIST / release_name), "zip", DIST, release_name)
+    return archive_path
+
 
 def main():
     DIST.mkdir(exist_ok=True)
-    if STAGING.exists():
-        shutil.rmtree(STAGING)
-    STAGING.mkdir()
+    created = []
+    for variant in VARIANTS:
+        created.append(build_variant(variant))
 
-    for name in INCLUDE_FILES:
-        source = ROOT / name
-        target = STAGING / name
-        shutil.copy2(source, target)
-
-    archive_path = shutil.make_archive(str(DIST / RELEASE_NAME), "zip", DIST, RELEASE_NAME)
-    print(f"Release package created: {archive_path}")
+    print("Release packages created:")
+    for path in created:
+        print(path)
 
 
 if __name__ == "__main__":

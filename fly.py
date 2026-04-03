@@ -1,13 +1,16 @@
 import argparse
+import ctypes
 import getpass
 import json
 import math
 import os
+import queue
 import re
 import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -21,10 +24,12 @@ STATE_FILE = Path(__file__).with_name(".fly_state.json")
 SESSION_LOG_FILE = Path(__file__).with_name(".fly_session.log")
 ROUTE_GPX_FILE = Path(__file__).with_name(".fly_route.gpx")
 KEYCHAIN_SERVICE = "moving.fly.sudo"
+IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
 
 # Default behavior can be adjusted here if needed.
 AUTO_TUNNEL_DEFAULT = True
-TUNNEL_USE_SUDO_DEFAULT = True
+TUNNEL_USE_SUDO_DEFAULT = IS_MACOS
 TUNNEL_START_TIMEOUT_SECONDS = 20
 MANUAL_RSD_HOST = None
 MANUAL_RSD_PORT = None
@@ -39,6 +44,41 @@ ROUTE_MIN_POINT_INTERVAL_SECONDS = 0.2
 
 def run_command(command):
     return subprocess.run(command, capture_output=True, text=True)
+
+
+def is_windows_admin():
+    if not IS_WINDOWS:
+        return True
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def probe_pymobiledevice3():
+    result = run_command([sys.executable, "-m", "pymobiledevice3", "version"])
+    if result.returncode != 0:
+        return False, result.stderr.strip() or result.stdout.strip() or "pymobiledevice3 check failed"
+    return True, (result.stdout or "").strip()
+
+
+def list_usbmux_devices():
+    result = run_command([sys.executable, "-m", "pymobiledevice3", "usbmux", "list"])
+    if result.returncode != 0:
+        return None, result.stderr.strip() or result.stdout.strip() or "usbmux list failed"
+
+    text = (result.stdout or "").strip()
+    if not text:
+        return [], None
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None, "usbmux list returned non-JSON output"
+
+    if not isinstance(payload, list):
+        return None, "usbmux list returned unexpected payload"
+    return payload, None
 
 
 def utc_now():
@@ -109,6 +149,8 @@ def current_username():
 
 
 def read_keychain_password():
+    if not IS_MACOS:
+        return None
     result = subprocess.run(
         [
             "security",
@@ -128,6 +170,8 @@ def read_keychain_password():
 
 
 def store_keychain_password(password):
+    if not IS_MACOS:
+        raise RuntimeError("auth-store is only supported on macOS.")
     result = subprocess.run(
         [
             "security",
@@ -149,6 +193,8 @@ def store_keychain_password(password):
 
 
 def delete_keychain_password():
+    if not IS_MACOS:
+        return False
     result = subprocess.run(
         [
             "security",
@@ -423,6 +469,9 @@ def build_tunnel_command(use_sudo):
 def ensure_sudo_session():
     global SUDO_PASSWORD_CACHE
 
+    if IS_WINDOWS:
+        raise RuntimeError("Windows does not use sudo tunnel startup. Run the terminal as Administrator instead.")
+
     print("準備確認 sudo 權限，讓背景 session 可以自動建立 tunnel。")
     if SUDO_PASSWORD_CACHE is None:
         SUDO_PASSWORD_CACHE = read_keychain_password()
@@ -468,6 +517,26 @@ def is_pid_running(pid):
     if not pid:
         return False
 
+    if IS_WINDOWS:
+        try:
+            pid_int = int(pid)
+        except (TypeError, ValueError):
+            return False
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid_int)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            if not ok:
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+
     try:
         os.kill(pid, 0)
         return True
@@ -476,28 +545,20 @@ def is_pid_running(pid):
 
 
 def terminate_session_pid(pid):
-    if not pid:
-        return
-
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if not is_pid_running(pid):
-            return
-        time.sleep(0.2)
-
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
+    terminate_pid(pid)
 
 
 def terminate_pid(pid):
     if not pid:
+        return
+
+    if IS_WINDOWS:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         return
 
     try:
@@ -519,6 +580,14 @@ def terminate_pid(pid):
 
 def start_tunnel(use_sudo):
     global SUDO_PASSWORD_CACHE
+
+    if use_sudo and IS_WINDOWS:
+        raise RuntimeError("Windows does not support sudo tunnel startup. Run the terminal as Administrator.")
+    if IS_WINDOWS and not is_windows_admin():
+        raise RuntimeError(
+            "Windows tunnel startup requires Administrator privileges.\n"
+            "請用系統管理員權限重新開啟 PowerShell 或 Terminal 後再重試。"
+        )
 
     command = build_tunnel_command(use_sudo)
     print("準備自動啟動 tunnel 以取得本次有效的 RSD 位址。")
@@ -546,28 +615,33 @@ def start_tunnel(use_sudo):
         process.stdin.flush()
         process.stdin.close()
 
+    output_queue = queue.Queue()
+
+    def _read_output_stream(stream):
+        try:
+            while True:
+                chunk = os.read(stream.fileno(), 4096)
+                if not chunk:
+                    break
+                output_queue.put(chunk)
+        except Exception:
+            pass
+        finally:
+            output_queue.put(None)
+
+    if process.stdout is not None:
+        threading.Thread(target=_read_output_stream, args=(process.stdout,), daemon=True).start()
+
+    stream_closed = False
     while time.monotonic() < deadline:
-        if process.poll() is not None:
-            remaining_output = b""
-            if process.stdout:
-                remaining_output = process.stdout.read() or b""
-            if remaining_output:
-                collected_chunks.append(remaining_output)
-            output = b"".join(collected_chunks).decode("utf-8", errors="replace").strip()
-            raise RuntimeError(
-                "自動啟動 tunnel 失敗。\n"
-                f"{output or '沒有收到可用輸出。'}"
-            )
-
-        if process.stdout is None:
+        if process.poll() is not None and stream_closed:
             break
-
-        ready, _, _ = select.select([process.stdout], [], [], 0.5)
-        if not ready:
+        try:
+            chunk = output_queue.get(timeout=0.5)
+        except queue.Empty:
             continue
-
-        chunk = os.read(process.stdout.fileno(), 4096)
-        if not chunk:
+        if chunk is None:
+            stream_closed = True
             continue
 
         collected_chunks.append(chunk)
@@ -578,8 +652,14 @@ def start_tunnel(use_sudo):
             print(f"已取得本次 tunnel 的 RSD: {rsd_host} {rsd_port}")
             return process, rsd_host, rsd_port
 
-    terminate_process(process)
     output = b"".join(collected_chunks).decode("utf-8", errors="replace").strip()
+    if process.poll() is not None:
+        raise RuntimeError(
+            "自動啟動 tunnel 失敗。\n"
+            f"{output or '沒有收到可用輸出。'}"
+        )
+
+    terminate_process(process)
     raise RuntimeError(
         "等待 tunnel 啟動逾時，未能取得 RSD_HOST / RSD_PORT。\n"
         f"{output or '沒有收到可解析的輸出。'}"
@@ -1047,6 +1127,8 @@ def show_status():
 
 def run_doctor(args):
     manual_rsd_host, manual_rsd_port = resolve_manual_rsd(args)
+    pmd3_ok, pmd3_info = probe_pymobiledevice3()
+    devices, devices_error = list_usbmux_devices()
 
     print("檢查目前腳本設定：")
     print(f"- Python executable: {sys.executable}")
@@ -1057,6 +1139,16 @@ def run_doctor(args):
     print(f"- tunnel_timeout_seconds: {TUNNEL_START_TIMEOUT_SECONDS}")
     print(f"- state_file: {STATE_FILE}")
     print(f"- session_log_file: {SESSION_LOG_FILE}")
+    if IS_WINDOWS:
+        print(f"- windows_admin: {'yes' if is_windows_admin() else 'no'}")
+    print()
+    print("基礎檢查：")
+    print(f"- pymobiledevice3: {'ok' if pmd3_ok else 'failed'}")
+    print(f"  detail: {pmd3_info}")
+    if devices_error:
+        print(f"- device_detect: failed ({devices_error})")
+    else:
+        print(f"- device_detect: {len(devices)} device(s)")
     print()
     print("預設行為：")
     print("1. set 會在背景啟動一個模擬定位 session。")
@@ -1079,9 +1171,13 @@ def run_doctor(args):
     print("4. 例如把 `...819-0031日本` 改成 `..., Fukuoka, 819-0031, Japan`。")
     print()
     print("密碼管理：")
-    print("1. 可用 `python fly.py auth-store` 把 sudo 密碼存入 macOS Keychain。")
-    print("2. 可用 `python fly.py auth-status` 檢查是否已保存。")
-    print("3. 可用 `python fly.py auth-clear` 刪除已保存的 sudo 密碼。")
+    if IS_MACOS:
+        print("1. 可用 `python fly.py auth-store` 把 sudo 密碼存入 macOS Keychain。")
+        print("2. 可用 `python fly.py auth-status` 檢查是否已保存。")
+        print("3. 可用 `python fly.py auth-clear` 刪除已保存的 sudo 密碼。")
+    else:
+        print("1. Windows 不使用 macOS Keychain。")
+        print("2. 若 tunnel 需要權限，請用系統管理員權限重新開啟終端機。")
 
 
 def add_connection_options(parser):
@@ -1134,14 +1230,15 @@ def parse_args():
     route_parser.add_argument("--route-source", choices=["osrm", "linear"], default="osrm", help="Route generation source")
     route_parser.add_argument("--route-profile", choices=["foot", "cycling", "driving"], default=ROUTE_PROFILE_DEFAULT, help="Routing profile for real-road route generation")
 
-    auth_status_parser = subparsers.add_parser("auth-status", help="Show whether a sudo password is stored in macOS Keychain")
-    auth_status_parser.set_defaults(action="auth-status")
+    if IS_MACOS:
+        auth_status_parser = subparsers.add_parser("auth-status", help="Show whether a sudo password is stored in macOS Keychain")
+        auth_status_parser.set_defaults(action="auth-status")
 
-    auth_store_parser = subparsers.add_parser("auth-store", help="Store sudo password in macOS Keychain for future tunnel startup")
-    auth_store_parser.set_defaults(action="auth-store")
+        auth_store_parser = subparsers.add_parser("auth-store", help="Store sudo password in macOS Keychain for future tunnel startup")
+        auth_store_parser.set_defaults(action="auth-store")
 
-    auth_clear_parser = subparsers.add_parser("auth-clear", help="Delete stored sudo password from macOS Keychain")
-    auth_clear_parser.set_defaults(action="auth-clear")
+        auth_clear_parser = subparsers.add_parser("auth-clear", help="Delete stored sudo password from macOS Keychain")
+        auth_clear_parser.set_defaults(action="auth-clear")
 
     hold_set_parser = subparsers.add_parser("_hold-set", help=argparse.SUPPRESS)
     hold_set_parser.set_defaults(auto_tunnel=AUTO_TUNNEL_DEFAULT, tunnel_use_sudo=TUNNEL_USE_SUDO_DEFAULT)
@@ -1178,11 +1275,15 @@ if __name__ == "__main__":
         if args.action == "clear":
             clear_location(args)
         elif args.action == "auth-status":
+            if not IS_MACOS:
+                raise RuntimeError("auth-status 只支援 macOS。")
             if has_keychain_password():
                 print("目前已在 macOS Keychain 保存 sudo 密碼。")
             else:
                 print("目前沒有保存 sudo 密碼。")
         elif args.action == "auth-store":
+            if not IS_MACOS:
+                raise RuntimeError("auth-store 只支援 macOS。")
             password = getpass.getpass("請輸入要保存到 macOS Keychain 的 sudo 密碼: ")
             if not password:
                 raise ValueError("密碼不可為空。")
@@ -1193,6 +1294,8 @@ if __name__ == "__main__":
             SUDO_PASSWORD_CACHE = password
             print("已保存 sudo 密碼到 macOS Keychain。")
         elif args.action == "auth-clear":
+            if not IS_MACOS:
+                raise RuntimeError("auth-clear 只支援 macOS。")
             if delete_keychain_password():
                 print("已從 macOS Keychain 刪除保存的 sudo 密碼。")
             else:

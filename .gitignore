@@ -8,3 +8,4 @@ dist/
 .fly_session.log
 .fly_route.gpx
 .saved_routes.json
+backups/

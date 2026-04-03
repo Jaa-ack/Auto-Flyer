@@ -1,30 +1,38 @@
 # Auto Fly
 
-Auto Fly is a macOS project for simulated iPhone GPS movement.
+Auto Fly is a cross-platform project for simulated iPhone GPS movement on macOS and Windows, with the same Web UI and CLI workflow on both systems.
 
 Languages:
 
 - English: `README.md`
 - Traditional Chinese: `README.zh-TW.md`
 
-Tools included:
+## Download Variants
+
+Release packages are prepared in four variants:
+
+- macOS English
+- macOS Traditional Chinese
+- Windows English
+- Windows Traditional Chinese
+
+Platform-specific quick guides:
+
+- macOS English: `README.macos.en.md`
+- macOS Traditional Chinese: `README.macos.zh-TW.md`
+- Windows English: `README.windows.en.md`
+- Windows Traditional Chinese: `README.windows.zh-TW.md`
+
+## Included Tools
 
 - `webui.py`
-  - browser UI
+  - local browser UI
 - `fly.py`
-  - terminal CLI
+  - command line tool
 - `geocode.py`
-  - address-to-coordinate helper
+  - address to coordinate helper
 
-## Author
-
-Author: `jaaaaack`
-
-## License
-
-MIT License. See `LICENSE`.
-
-## Install
+## Quick Start
 
 1. Clone the repository.
 
@@ -33,44 +41,48 @@ git clone <your-repo-url>
 cd Auto-Fly
 ```
 
-2. Create a virtual environment.
+2. Create and activate a virtual environment.
+
+macOS:
 
 ```bash
 python3 -m venv .venv
-```
-
-3. Activate it.
-
-```bash
 source .venv/bin/activate
 ```
 
-4. Install dependencies.
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+3. Install dependencies.
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-5. Prepare the iPhone.
+4. Prepare the iPhone.
 
 - connect the iPhone by USB
-- trust the Mac
+- trust the computer
 - enable Developer Mode
+- on Windows, open PowerShell or Terminal as Administrator when needed
 
-Developer Mode is usually here:
+5. Start the Web UI.
 
-```text
-Settings > Privacy & Security > Developer Mode
-```
-
-## Quick Start
-
-### Browser UI
+macOS:
 
 ```bash
-source .venv/bin/activate
 python webui.py
+```
+
+Windows:
+
+```powershell
+.venv\Scripts\python.exe webui.py
 ```
 
 Open:
@@ -79,27 +91,7 @@ Open:
 http://127.0.0.1:8765
 ```
 
-### CLI
-
-Search an address:
-
-```bash
-python geocode.py "Tokyo Tower, Tokyo, Japan"
-```
-
-Set a fixed point:
-
-```bash
-python fly.py set --lat 35.6584491 --lng 139.7455368
-```
-
-Clear simulated location:
-
-```bash
-python fly.py clear
-```
-
-## Web UI
+## Daily Use
 
 Main flow:
 
@@ -109,21 +101,14 @@ Main flow:
 4. use `route` to run `A -> B -> C ... -> A`
 5. use `clear` to stop simulation
 
-### Config Modes
-
-- `preset`
-- `manual`
-
-### Preset Route Modes
+Preset route modes:
 
 - `walk`
 - `cycle`
 - `car-direct`
 - `car-road`
 
-### Route Timer
-
-Shows:
+The route timer shows:
 
 - current state
 - start time
@@ -132,19 +117,19 @@ Shows:
 
 ## Common CLI Commands
 
-Set one point:
+Search an address:
+
+```bash
+python geocode.py "Tokyo Tower, Tokyo, Japan"
+```
+
+Set point `A`:
 
 ```bash
 python fly.py set --lat 25.0330 --lng 121.5654
 ```
 
-Negative coordinates are supported:
-
-```bash
-python fly.py set --lat 40.6860733 --lng -74.019077
-```
-
-Run a route:
+Run a closed-loop route:
 
 ```bash
 python fly.py route \
@@ -165,43 +150,44 @@ Stop simulation:
 python fly.py clear
 ```
 
-## Build A Release Zip
+Negative coordinates are supported:
 
-Create a release package:
+```bash
+python fly.py set --lat 40.6860733 --lng -74.019077
+```
+
+## Build Release Packages
+
+Create all four release zip files:
 
 ```bash
 python build_release.py
 ```
 
-It will generate:
+Generated files:
 
 ```text
-dist/auto-fly-<version>.zip
+dist/auto-fly-macos-en-<version>.zip
+dist/auto-fly-macos-zh-TW-<version>.zip
+dist/auto-fly-windows-en-<version>.zip
+dist/auto-fly-windows-zh-TW-<version>.zip
 ```
 
-Current version is stored in:
+Current version is stored in `VERSION`.
 
-```text
-VERSION
-```
+## Release Files
 
-## GitHub Release Suggestion
+- GitHub description: `GITHUB_DESCRIPTION.md`
+- English release notes: `RELEASE_NOTES_v<version>.md`
+- Traditional Chinese release notes: `RELEASE_NOTES_v<version>.zh-TW.md`
 
-Recommended release flow:
+## Author
 
-1. update `VERSION`
-2. run `python build_release.py`
-3. create a GitHub Release
-4. upload the generated zip from `dist/`
+Author: `jaaaaack`
 
-Release text files:
+## License
 
-- English: `RELEASE_NOTES_v0.1.0.md`
-- Traditional Chinese: `RELEASE_NOTES_v0.1.0.zh-TW.md`
-
-GitHub repo description text:
-
-- `GITHUB_DESCRIPTION.md`
+MIT License. See `LICENSE`.
 
 ## Local Files That Should Not Be Uploaded
 
@@ -214,5 +200,6 @@ These files stay local:
 - `__pycache__/`
 - `.venv/`
 - `dist/`
+- `backups/`
 
 The repo already includes `.gitignore` for them.

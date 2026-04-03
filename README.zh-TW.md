@@ -1,30 +1,38 @@
 # Auto Fly
 
-Auto Fly 是一個 macOS 專案，用來在 iPhone 上執行 simulated location。
+Auto Fly 是一個跨 macOS 與 Windows 的 iPhone 模擬 GPS 專案，兩個系統共用相同的 Web UI 與 CLI 操作流程。
 
 語言版本：
 
 - English: `README.md`
 - 繁體中文：`README.zh-TW.md`
 
-包含三個工具：
+## 下載版本
+
+Release 會提供四個版本：
+
+- macOS English
+- macOS 繁體中文
+- Windows English
+- Windows 繁體中文
+
+各平台快速說明：
+
+- macOS English: `README.macos.en.md`
+- macOS 繁體中文：`README.macos.zh-TW.md`
+- Windows English: `README.windows.en.md`
+- Windows 繁體中文：`README.windows.zh-TW.md`
+
+## 內含工具
 
 - `webui.py`
-  - 瀏覽器介面
+  - 本機瀏覽器介面
 - `fly.py`
-  - 終端機主程式
+  - 命令列工具
 - `geocode.py`
-  - 地址轉座標
+  - 地址轉座標工具
 
-## 作者
-
-作者：`jaaaaack`
-
-## 授權
-
-MIT License，請見 `LICENSE`。
-
-## 安裝
+## 快速開始
 
 1. 下載專案
 
@@ -33,44 +41,48 @@ git clone <your-repo-url>
 cd Auto-Fly
 ```
 
-2. 建立虛擬環境
+2. 建立並啟用虛擬環境
+
+macOS：
 
 ```bash
 python3 -m venv .venv
-```
-
-3. 啟用虛擬環境
-
-```bash
 source .venv/bin/activate
 ```
 
-4. 安裝依賴
+Windows PowerShell：
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+3. 安裝依賴
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-5. 準備 iPhone
+4. 準備 iPhone
 
-- 用 USB 接上 Mac
-- 信任這台 Mac
+- 用 USB 接上電腦
+- 信任這台電腦
 - 開啟 Developer Mode
+- Windows 需要時請用系統管理員開啟 PowerShell 或 Terminal
 
-Developer Mode 通常在：
+5. 啟動 Web UI
 
-```text
-設定 > 隱私權與安全性 > Developer Mode
-```
-
-## 快速開始
-
-### 用瀏覽器介面
+macOS：
 
 ```bash
-source .venv/bin/activate
 python webui.py
+```
+
+Windows：
+
+```powershell
+.venv\Scripts\python.exe webui.py
 ```
 
 打開：
@@ -79,51 +91,24 @@ python webui.py
 http://127.0.0.1:8765
 ```
 
-### 用終端機
-
-查地址：
-
-```bash
-python geocode.py "Tokyo Tower, Tokyo, Japan"
-```
-
-固定到一個點：
-
-```bash
-python fly.py set --lat 35.6584491 --lng 139.7455368
-```
-
-停止模擬：
-
-```bash
-python fly.py clear
-```
-
-## Web UI
+## 日常使用流程
 
 主要流程：
 
 1. 搜尋地址
 2. 加入點位
-3. 用 `set` 把 `A` 點設為定位
+3. 用 `set` 把 A 點設為定位
 4. 用 `route` 跑 `A -> B -> C ... -> A`
 5. 用 `clear` 停止模擬
 
-### 設定模式
-
-- `preset`
-- `manual`
-
-### 固定路線模式
+固定路線模式：
 
 - `walk`
 - `cycle`
 - `car-direct`
 - `car-road`
 
-### Route 計時器
-
-會顯示：
+Route 計時器會顯示：
 
 - 目前狀態
 - 開始時間
@@ -132,19 +117,19 @@ python fly.py clear
 
 ## 常用 CLI 指令
 
-固定到一個點：
+查地址：
+
+```bash
+python geocode.py "Tokyo Tower, Tokyo, Japan"
+```
+
+固定到 A 點：
 
 ```bash
 python fly.py set --lat 25.0330 --lng 121.5654
 ```
 
-負經緯度也支援：
-
-```bash
-python fly.py set --lat 40.6860733 --lng -74.019077
-```
-
-跑 route：
+執行閉環 route：
 
 ```bash
 python fly.py route \
@@ -153,7 +138,7 @@ python fly.py route \
   --lat 25.0345 --lng 121.5670
 ```
 
-看狀態：
+查看狀態：
 
 ```bash
 python fly.py status
@@ -165,6 +150,12 @@ python fly.py status
 python fly.py clear
 ```
 
+也支援負經緯度：
+
+```bash
+python fly.py set --lat 40.6860733 --lng -74.019077
+```
+
 ## 產生 Release 壓縮檔
 
 執行：
@@ -173,33 +164,30 @@ python fly.py clear
 python build_release.py
 ```
 
-會產生：
+會產生四個壓縮檔：
 
 ```text
-dist/auto-fly-<version>.zip
+dist/auto-fly-macos-en-<version>.zip
+dist/auto-fly-macos-zh-TW-<version>.zip
+dist/auto-fly-windows-en-<version>.zip
+dist/auto-fly-windows-zh-TW-<version>.zip
 ```
 
-目前版本號放在：
+目前版本號放在 `VERSION`。
 
-```text
-VERSION
-```
+## Release 相關檔案
 
-## GitHub Release 建議流程
+- GitHub repo description：`GITHUB_DESCRIPTION.md`
+- 英文 release notes：`RELEASE_NOTES_v<version>.md`
+- 繁中 release notes：`RELEASE_NOTES_v<version>.zh-TW.md`
 
-1. 更新 `VERSION`
-2. 執行 `python build_release.py`
-3. 到 GitHub 建立 Release
-4. 上傳 `dist/` 內產生的 zip
+## 作者
 
-Release 說明檔：
+作者：`jaaaaack`
 
-- 英文：`RELEASE_NOTES_v0.1.0.md`
-- 繁中：`RELEASE_NOTES_v0.1.0.zh-TW.md`
+## 授權
 
-GitHub repo description 文字：
-
-- `GITHUB_DESCRIPTION.md`
+MIT License，請見 `LICENSE`。
 
 ## 不要上傳的本機檔案
 
@@ -212,5 +200,6 @@ GitHub repo description 文字：
 - `__pycache__/`
 - `.venv/`
 - `dist/`
+- `backups/`
 
 專案已經有 `.gitignore`，會自動忽略它們。
